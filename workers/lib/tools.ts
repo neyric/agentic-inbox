@@ -75,6 +75,63 @@ export async function toolGetEmail(
 	return email;
 }
 
+// ── get_attachment ─────────────────────────────────────────────────
+
+/** Image types a model can view directly; anything else is converted to text. */
+const VIEWABLE_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+const MAX_TEXT_CHARS = 50_000;
+
+function bytesToBase64(bytes: Uint8Array) {
+	let binary = "";
+	for (let i = 0; i < bytes.length; i += 0x8000) {
+		binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+	}
+	return btoa(binary);
+}
+
+export async function toolGetAttachment(
+	env: Env,
+	mailboxId: string,
+	emailId: string,
+	attachmentId: string,
+) {
+	const stub = getMailboxStub(env, mailboxId);
+	const attachment = await stub.getAttachment(attachmentId);
+	if (!attachment || attachment.email_id !== emailId) {
+		return { error: "Attachment not found" };
+	}
+	const obj = await env.BUCKET.get(
+		`attachments/${emailId}/${attachmentId}/${attachment.filename}`,
+	);
+	if (!obj) return { error: "Attachment file not found" };
+	const bytes = new Uint8Array(await obj.arrayBuffer());
+
+	if (VIEWABLE_IMAGE_TYPES.has(attachment.mimetype)) {
+		if (bytes.byteLength > MAX_IMAGE_BYTES) {
+			return { attachment, error: `Image is larger than ${MAX_IMAGE_BYTES} bytes` };
+		}
+		return {
+			attachment,
+			image: { data: bytesToBase64(bytes), mimeType: attachment.mimetype },
+		};
+	}
+
+	const converted = await env.AI.toMarkdown({
+		name: attachment.filename,
+		blob: new Blob([bytes], { type: attachment.mimetype }),
+	});
+	if (converted.format === "error") {
+		return { attachment, error: `Could not convert attachment to text: ${converted.error}` };
+	}
+	const truncated = converted.data.length > MAX_TEXT_CHARS;
+	return {
+		attachment,
+		text: truncated ? converted.data.slice(0, MAX_TEXT_CHARS) : converted.data,
+		truncated,
+	};
+}
+
 // ── get_thread ─────────────────────────────────────────────────────
 
 export async function toolGetThread(

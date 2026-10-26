@@ -9,6 +9,7 @@ import {
 	toolListMailboxes,
 	toolListEmails,
 	toolGetEmail,
+	toolGetAttachment,
 	toolGetThread,
 	toolSearchEmails,
 	toolDraftReply,
@@ -141,6 +142,37 @@ export class EmailMCP extends McpAgent<Env> {
 					};
 				}
 				return mcpText(result);
+			},
+		);
+
+		// ── get_attachment ─────────────────────────────────────────
+		this.server.tool(
+			"get_attachment",
+			"Read an email attachment. Images (PNG, JPEG, GIF, WebP) are returned as images; documents (PDF, Word, Excel, CSV, HTML, etc.) are converted to Markdown text. Get attachment IDs from get_email.",
+			{
+				mailboxId: z.string().describe("The mailbox email address"),
+				emailId: z.string().describe("The email ID the attachment belongs to"),
+				attachmentId: z.string().describe("The attachment ID from get_email"),
+			},
+			async ({ mailboxId, emailId, attachmentId }) => {
+				const denied = await verifyMailbox(mailboxId);
+				if (denied) return denied;
+				const result = await toolGetAttachment(env, mailboxId, emailId, attachmentId);
+				if ("error" in result) return mcpResult(result);
+				const { attachment } = result;
+				const header = `${attachment.filename} (${attachment.mimetype}, ${attachment.size} bytes)`;
+				if ("image" in result && result.image) {
+					return {
+						content: [
+							{ type: "text" as const, text: header },
+							{ type: "image" as const, data: result.image.data, mimeType: result.image.mimeType },
+						],
+					};
+				}
+				const note = result.truncated ? "\n\n[Truncated: only the beginning of the attachment is shown]" : "";
+				return {
+					content: [{ type: "text" as const, text: `${header}\n\n${result.text}${note}` }],
+				};
 			},
 		);
 
